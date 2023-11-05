@@ -1,0 +1,521 @@
+
+Terraform's primary function is to create, modify and destroy infrastructure resources to match the desired state described in terraform configuration
+Desired state  - in terraform config  *.tf file (if empty - terraform will remove all (in accordance with terraform.tfstate file))
+Current state - is the actual state of a resource that is currently deployed
+If there is a difference between these two states - "terraform plan" command will present a description of the neccessary changes
+
+Important - what is not described in .tf file is not counted for a difference  (e.g - if SG is not described as a part of desired state of EC2 resource in .tf file then even changed in AWS console will not impact a TF plan (but a plan itself will be updated accordingly with new SG (terraform refresh)))
+Then, always specify ALL important parameters of the resource in .tf file
+
+Resource behavior - https://developer.hashicorp.com/terraform/language/resources/behavior
+Some details of that behavior can be customized using the special nested LIFECYCLE block (lifecycle Meta-Argument) within a resource block body (find examples below).
+
+instead of running one big .tf file make many  .tf files each having one thing to care about, like providers.tf ec2_instances.tf iam_users.tf variables.tf terraform.tfvars  (everything in the same dir)
+
+Authentication and Authorization
+============================
+
+Main rule - look in documentation for each provider under "Authentication" part, like for aws provider https://registry.terraform.io/providers/hashicorp/aws/latest/docs --> Authentication and Configuration
+Usage:
+provider "aws" {
+  region     = "us-west-2"
+  access_key = "my-access-key"
+  secret_key = "my-secret-key"
+}
+
+The AWS Provider can source credentials and other settings from the shared configuration and credentials files. By default, these files are located at 
+$HOME/.aws/config
+$HOME/.aws/credentials 
+on Linux and macOS,
+and "%USERPROFILE%\.aws\config" and "%USERPROFILE%\.aws\credentials" on Windows.
+and it is the same default location that be configured by running AWS CLI command "aws configure". In that case no need to mention this in TF provider conf block above.
+
+The locations of the shared configuration and credentials files can be configured using either the parameters shared_config_files and shared_credentials_files
+
+For example:
+provider "aws" {
+  shared_config_files      = ["/Users/tf_user/.aws/conf"]
+  shared_credentials_files = ["/Users/tf_user/.aws/creds"]
+  profile                  = "customprofile"
+}
+
+
+Providers and Resources
+====================
+Official (of hashicorp)
+Partner
+Community 
+
+For example, we can consider a resource like this:
+
+resource "aws_instance" "example" {
+  # ...
+}
+
+If you haven't declared what provider you mean by aws then Terraform will assume that you mean to write something like this:
+
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+      version = '~> 3.0'  #default - latest version, maybe >=1.0 <=1.0 or both, means between
+    }
+  }
+}
+
+Block "required_providers" is essential for Partner\Community providers
+
+*Provider plugin version is locked by .terraform.lock.hcl file at very first time it was downloaded by running terraform init - maybe deleted if you want to change provider version (if it was loacked at 4.62 and now there is version 4.8)
+Another way is to put exact version in tf file and then run "terraform init -upgrade"
+
+Comment a block in Terraform
+=========================
+/*
+*/
+If a code is commented out in config some.tf file, next time terraform plan / apply will be running it assumes that there is no such code (= deleted) and will destroy it if exists
+# (// - same as hash) - single line
+ 
+Terraform state file (terraform.tfstate)
+================================
+Stores the state of the infrastructure created from .tf file
+This state allows terraform to map resource in a remote system (real world) and resource declared in your configuration (.tf file)
+If terraform.tfstate is removed (losing state) then Terraform loses track of the infrastructure that exists. If that is lost, it will try to delete things that shouldn't be deleted or, more likely, create things that already exist.
+Make sure you always have a backup of this file!
+Never modify state file directly but make use of "terraform state" command
+
+terraform.tfstate file gets updated only after "terraform apply" command was ran
+
+Terraform settings
+================
+terraform {
+  required_version = "< 0.11"
+  required_providers {
+    aws = "~> 2.0"
+  }
+
+Terraform COMMANDS
+====================
+- Debbuging:
+set var TF_LOG=TRACE (DEBUG,INFO,WARN,ERROR)
+temporally: export TF_LOG=TRACE (export TF_LOG_PATH=/tmp/tfout.log)
+
+- terraform fmt   #  will properly format .tf file in the same dir
+- terraform validate # will validate .tf file (including undeclaring vars etc)
+
+- terraform refresh  # shouldn't be used explicitly because TF automatically perform refreshing as a part of tf plan and tf apply commands.
+Running manually is pretty dangerous because refresh command may remove some (or all) resources described in terraform.tfstate file (e.g. if change was done in .tf file before refresh)
+
+- terraform plan -refresh=false #prevent TF from querying the current state
+- terraform plan -target=resource (e.g. ec2) #target only specified resource and isolate the rest. Useful in case only one resource was changed
+
+- terraform plan -out path=tfconf_backup (will be saved as binary file) and then you can run apply based on this file
+terraform apply tfconf_backup
+
+- terraform apply -auto-approve
+- terraform apply -replace="aws_instance.webserver" (in old TF versions "terraform taint")
+#will destroy and then create the resource from scratch as described in .tf file even there was no change in the resource for TF (e.g. changes were made manually)
+
+- terraform state (list, mv(=rename resorce), rm(deleted resorce is not physically removed), pull(output if remote state file) )
+
+- terraform ouput iam_names # is used to extract the value of output var from terraform.tfstate file
+
+- terraform graph - will generate a visual representation  of .tf configuration (needs additional tools and installations)
+
+- terraform import - will bring manually created resorces into TF (both resources.tf and terraform.tfstate files will be created)
+Use"import" block in .tf file.
+then run "terraform  plan -generate-config-out=mynewconf.tf"
+
+EXAMPLES
+=========
+
+** VARIABLES **
+==============
+https://developer.hashicorp.com/terraform/language/values/variables#variable-definition-precedence
+
+The name of a variable can be any valid identifier except the following: source, version, providers, count, for_each, lifecycle, depends_on, locals.
+
+Create variables.tf  file with vars inside like :
+variable "elb_ip" {
+  default = 10.20.30.40
+}
+variable "instance_type" {
+  default = "t2.micro"
+}
+# If a default value is not defined that tf plan \ tf apply will ask you for this value
+
+and in config .tf file use variable name like:  
+cidr_blocks = var.vpn_ip
+
+You may use variables.tf  along with terraform.tfvars 
+In variables.tf :  variable "instance_type" {}
+In terraform.tfvars: instance_type="t2.large"
+If instead of In terraform.tfvars use custom name: terraform plan -var-file="custom.tfvars"
+
+Setting a var with a command wil take priority of a value in variables.tf:
+terraform plan -var="instance_type=t2.small"
+
+Another way use as ENV VAR: (linux) export TF_VAR_instance_type="t2.large"
+
+var name can be defined in .tf file but then you yet need set up the var itself in terraform.tfvars
+
+VARIABLES DATA TYPES
+--------------------------------
+variables.tf (it is best practice to define a type for each var):
+variable "elb_name" {
+  type = string
+}
+variable "az" {
+  type = list
+}
+variable "timeout" {
+  type = number
+}
+variable "ec2_types" {
+  type = map
+  default = {
+      us-west-1 = "t2.micro"
+      us-west-2 = "t2.nano"
+   }
+}
+
+terraform.tfvars:
+elb_name="myelb"                 #type string
+az=["us-west-1","us-west-2"] #list
+timeout=60                              #number
+
+config .tf:
+instance_type = var.ec2_types[us-west-1]
+OR
+instance_type = var.ec2_list[0]
+
+CONDITIONAL expressions in .tf work with var as well:
+----------------------------------------------------------------------
+
+provider "aws" {
+ }
+
+variable "istest" {} # set up this var as conditional expression
+#and in in terraform.tfvars give the value, like "istest = true"
+
+resource "aws_instance" "dev" {
+   ami = "ami-082b5a644766e0e6f"
+   instance_type = "t2.micro"
+   count = var.istest == true ? 3 : 0 #meaning if var.istest is true create 3 if not (false) then 0
+}
+
+resource "aws_instance" "prod" {
+   ami = "ami-082b5a644766e0e6f"
+   instance_type = "t2.large"
+   count = var.istest == false ? 1 : 0  #meaning if var.istest is false create 1 if not (true) then 0
+}
+
+** CROSS RESOURCES Attribute References **
+======================================
+Go to Documentation of desired Provider --> choose Resource and look for "Attribute Reference" list here (present for each resource)
+
+resource "aws_instance" "myec2" {
+   ami = "ami-082b5a644766e0e6f"
+   instance_type = "t2.micro"
+}
+
+resource "aws_eip" "lb" {
+  vpc      = true
+}
+
+resource "aws_eip_association" "eip_assoc" {
+  instance_id   = aws_instance.myec2.id
+  allocation_id = aws_eip.lb.id
+}
+
+
+resource "aws_security_group" "allow_tls" {
+  name        = "kplabs-security-group"
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["${aws_eip.lb.public_ip}/32"]
+
+
+
+**  OUTPUT Values **
+==================
+
+To get a value output on a screen while running tf apply use "output" block
+
+resource "aws_eip" "lb" {
+  vpc      = true
+}
+# running this you will get a standard output:  aws_eip.lb will be created and each attribute will get "= (known after apply)
+
+Adding this block:
+output "public-ip" {
+   value =  "aws_eip.lb.public_ip
+}
+#public_ip is from a list of "Attribute Reference" of the resource. Without specifying an attribute  ALL attributes of the resource will be presented
+The same you will find in terraform.tfstate file under "outputs"/"name of your output block"
+
+will get 
+Outputs:
+public-ip = " real IP of created resource"
+as a part of terraform apply command.
+
+Can use a substituation as well:
+output "public-ip" {
+   value =  "https://$(aws_eip.lb.public_ip):8080"
+}
+
+OR use with "count" (splat expressions): 
+output "arns" {
+  value = aws_iam_user.lb[*].arn
+}
+output "arns" {
+  value = aws_iam_user.lb[*].name
+}
+
+To make a map (key=value pair) out of these outputs add zipmap function at the end:
+output "combined_outputs" {
+  value = zipmap(aws_iam_user.lb[*].name, aws_iam_user.lb[*].arn)
+}
+
+use "sensitive = true" in case pf password etc (the vbalue will be not displayed in CLI but in terraform.tfstate file)
+
+
+** COUNT Parameter **  
+====================
+resource "aws_instance" "instance-1" {
+   ami = "ami-082b5a644766e0e6f"
+   instance_type = "t2.micro"
+   count = 3
+}   #three ec2 instances will be created from this AMI
+
+#This config will create 3 users with unique names from the list
+provider "aws" {
+  region     = "us-west-2"
+}
+variable "elb_names" {
+  type = list
+  default = ["dev-loadbalancer", "stage-loadbalanacer","prod-loadbalancer"]
+}
+resource "aws_iam_user" "lb" {
+  name = var.elb_names[count.index]
+  count = 3
+  path = "/system/"
+}
+
+
+**LOCAL values**
+===============
+Terraform local values (or "locals") assign a name to an expression or value. Using locals simplifies your Terraform configuration – since you can reference the local multiple times, you reduce duplication in your code. 
+
+locals {
+  common_tags = {
+    Owner = "DevOps Team"
+    service = "backend"
+  }
+}
+resource "aws_ebs_volume" "db_ebs" {
+  availability_zone = "us-west-2a"
+  size              = 8
+  tags = local.common_tags
+}
+
+Use "local" instead of "var" when you want a value being put in one cenralized place (like any var) but with no option to overwrite it (as it possible with var - you set default value with var which can be overwritten)
+Especially with modules.
+
+-- This is how to overwrite var default value:
+variables.tf:
+variable "app_port" {
+  default - "8444"
+}
+
+conf.tf:
+module "sg_module" {
+  source = "path/sg"
+  app_port = 22               # will take place
+}
+
+-- NOT overwritable value with local (In "Module" config file):
+resource "aws_security_group" "ec2-sg" {
+  name        = "myec2-sg"
+
+  ingress {
+    description      = "Allow Inbound from Secret Application"
+    from_port        = local.app_port
+    to_port          = local.app_port
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+locals {
+  app_port = 8444
+}
+
+
+**FUNCTIONS**      (only built-in functions are available for use)
+==============
+https://developer.hashicorp.com/terraform/language/functions
+
+
+**DATA SOURCE code**
+====================
+The same resource may have different ID in different regions, e.g AMI of AWS. Instead of hard-coding AMI id for each region use data block with filter with owners (amazon/self etc), name and value
+
+data "aws_ami" "app_ami" {
+  most_recent = true
+  owners = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm*"]
+  }
+}
+# https://docs.aws.amazon.com/cli/latest/reference/ec2/describe-instances.html  about --filters option
+
+resource "aws_instance" "instance-1" {
+    ami = data.aws_ami.app_ami.id
+   instance_type = "t2.micro"
+}
+
+** DYNAMIC blocks (for_each)**
+===========================
+https://developer.hashicorp.com/terraform/language/expressions/dynamic-blocks
+Terraform dynamic blocks are a special Terraform block type that provide the functionality of a for expression by creating multiple nested blocks. 
+variable "sg_ports" {
+  type        = list(number)
+  description = "list of ingress ports"
+  default     = [8200, 8201,8300, 9200, 9500]
+}
+
+resource "aws_security_group" "dynamicsg" {
+  name        = "dynamic-sg"
+  description = "Ingress for Vault"
+
+  dynamic "ingress" {
+    for_each = var.sg_ports
+    iterator = port
+    content {
+      from_port   = port.value
+      to_port     = port.value
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
+  dynamic "egress" {
+    for_each = var.sg_ports
+    content {
+      from_port   = egress.value
+      to_port     = egress.value
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+}
+
+#another example with "toset" function
+resource "aws_iam_user" "iam" {
+  for_each = toset( ["user-01","user-02", "user-03"] )
+  name     = each.key
+}
+
+**Changing default resource behavior with LifeCycle Meta-Argument
+==========================================================
+The arguments available within a lifecycle block are 
+create_before_destroy, prevent_destroy, ignore_changes, and replace_triggered_by.
+
+To IGNORE manually made changes in infra (here -tags) - add in the resource block:
+lifecycle {
+       ignore_changes = [tags]
+}
+
+
+** Provisioners**
+==============
+https://developer.hashicorp.com/terraform/language/resources/provisioners/syntax
+
+You can use provisioners to model specific actions on the local machine or on a remote machine in order to prepare servers or other infrastructure objects for service.
+
+"file" provisoner
+https://developer.hashicorp.com/terraform/language/resources/provisioners/file
+# Copies the string in content into /tmp/file.log
+  provisioner "file" {
+    content     = "ami used: ${self.ami}"
+    destination = "/tmp/file.log"
+  }
+
+"remote-exec"  (to run command on remote server itself 
+https://developer.hashicorp.com/terraform/language/resources/provisioners/remote-exec
+https://developer.hashicorp.com/terraform/language/resources/provisioners/connection
+  # Establishes connection to be used by all
+  # generic remote provisioners (i.e. file/remote-exec)
+  connection {
+    type     = "ssh"
+    user     = "root"
+    password = var.root_password
+    #private_key = key.pem of the remote server
+    host     = self.public_ip
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "command 1",
+      "command 2",
+    ]
+  }
+}
+
+"local-exec" (to run command from TF server after resource is created --> for running Ansible playbook)
+https://developer.hashicorp.com/terraform/language/resources/provisioners/local-exec
+
+
+TF backends and State File locking
+============================
+https://developer.hashicorp.com/terraform/language/settings/backends/configuration
+A backend defines where Terraform stores its state data files.
+Default - local backend
+When TF executes "write" operation (apply/destroy) the terraform.tfstate is locked and another "write" operation will fails with error "Error acquiring the state lock" (NOT ALL backends support StateFile locking make sure you has one when working in team)
+
+TF has "force-unlock" command to manually unlock the state
+When state locked the terraform.tfstate.lock.info file is created. the file has info about lock ID, who and when executes write operation. Once unlocked - file gets deleted
+
+DynamoDB with S3 backend for state locking - one of useful implementation
+
+
+Resorces in multiple Regions (AWS)
+==============================
+# If you have more that 1 same providers use "alias" in providers.tf
+provider "aws" {
+  region     =  "us-west-1"
+}
+
+provider "aws" {
+  alias      =  "aws02"
+  region     =  "ap-south-1"
+  profile    =  "account02"
+}
+
+And then resource will point to the alias 
+resource "aws_eip" "myeip01" {
+  vpc = "true"
+  provider = "aws.aws02"
+}
+
+Resorces in multiple accounts (AWS)
+==============================
+
+in .aws/credentials files
+[default]
+aws_access_key_id=
+aws_secret_access_key=
+[account02]
+aws_access_key_id=
+aws_secret_access_key=
+
+and then add to providers.tf "profile" parameter - see in example above
+
+
+
+
+
